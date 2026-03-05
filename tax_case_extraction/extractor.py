@@ -18,10 +18,7 @@ import instructor
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-try:
-    from app.models.schemas import TaxCaseExtraction
-except ImportError:
-    from tax_case_extraction.schemas import TaxCaseExtraction
+from .schemas import TaxCaseExtraction
 
 # Configure logging
 logging.basicConfig(
@@ -37,9 +34,9 @@ load_dotenv()
 # -----------------------------
 DEFAULT_CHUNK_SIZE = 2000
 DEFAULT_OVERLAP = 250
-OUTPUT_DIR = Path("output")
-DOCS_DIR = Path("docs")
-CACHE_DIR = Path(".cache")
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
+DOCS_DIR = Path(os.getenv("DOCS_DIR", "docs"))
+CACHE_DIR = Path(os.getenv("CACHE_DIR", ".cache"))
 MAX_WORKERS = 3  # Parallel processing for chunks (be mindful of API rate limits)
 MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1")  # Configurable model
 
@@ -349,6 +346,7 @@ def save_extraction_results(
     pdf_path: str, 
     data: Dict[str, Any], 
     output_dir: Path = OUTPUT_DIR,
+    output_filename: Optional[str] = None,
     add_metadata: bool = True,
     deduplicate: bool = True
 ) -> Path:
@@ -359,6 +357,7 @@ def save_extraction_results(
         pdf_path: Original PDF file path
         data: Extracted data dictionary
         output_dir: Directory to save output files
+        output_filename: Optional custom output filename (without extension)
         add_metadata: Whether to add processing metadata
         deduplicate: Whether to deduplicate lists before saving
         
@@ -381,7 +380,10 @@ def save_extraction_results(
             "version": "1.0"
         }
     
-    json_filename = Path(pdf_path).stem + "_extraction-"+MODEL_NAME+".json"
+    if output_filename:
+        json_filename = f"{output_filename}.json"
+    else:
+        json_filename = Path(pdf_path).stem + "_extraction-"+MODEL_NAME+".json"
     output_path = output_dir / json_filename
     
     try:
@@ -414,10 +416,20 @@ def get_instructor_client(api_key: str = None):
     if not api_key:
         raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
     
+    base_url = os.getenv('OPENAI_BASE_URL')
+    
     try:
+        client_kwargs = {
+            "api_key": api_key,
+        }
+        
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            logger.info(f"Using custom base URL: {base_url}")
+        
         client = instructor.from_provider(
             f"openai/{MODEL_NAME}",
-            api_key=api_key,
+            **client_kwargs
         )
         logger.info("Successfully initialized instructor client")
         return client
@@ -545,7 +557,7 @@ def extract_from_chunks(
 
 def process_pdf_file(
     pdf_path: str, 
-    client,
+    client=None,
     use_cache: bool = True,
     parallel_chunks: bool = False
 ) -> Dict[str, Any]:
@@ -554,7 +566,7 @@ def process_pdf_file(
     
     Args:
         pdf_path: Path to the PDF file
-        client: Instructor client
+        client: Instructor client (will be initialized if not provided)
         use_cache: Whether to use cached results if available
         parallel_chunks: Whether to process chunks in parallel
         
@@ -562,6 +574,10 @@ def process_pdf_file(
         Extracted structured data dictionary
     """
     logger.info(f"Starting processing of {pdf_path}")
+    
+    # Initialize client if not provided
+    if client is None:
+        client = get_instructor_client()
     
     # Check if we have cached extraction results
     if use_cache:
@@ -622,20 +638,24 @@ def discover_pdf_files(directory: Path = DOCS_DIR, pattern: str = "*.pdf") -> Li
     return pdf_files
 
 
-def main(
+def extract(
+    pdf_path: Optional[str] = None,
     pdf_files: Optional[List[str]] = None,
     use_cache: bool = True,
     parallel_chunks: bool = False,
     output_dir: Path = OUTPUT_DIR
 ):
     """
-    Main execution function.
+    Main extraction function - extracts structured data from tax case PDFs.
     
     Args:
-        pdf_files: List of PDF file paths to process (auto-discovers if None)
+        pdf_path: Single PDF file path to process (most common usage)
+        pdf_files: List of PDF file paths to process (alternative to pdf_path)
         use_cache: Whether to use cached results
         parallel_chunks: Whether to process chunks in parallel
         output_dir: Directory to save output files
+        
+    Note: If both pdf_path and pdf_files are None, auto-discovers PDFs from docs/ directory
     """
     start_time = datetime.now()
     logger.info(f"=== Starting Tax Case Extraction Pipeline ===")
@@ -648,10 +668,15 @@ def main(
         client = get_instructor_client()
         
         # Define or discover PDF files to process
-        if pdf_files is None:
-            pdf_paths = discover_pdf_files(DOCS_DIR)
-        else:
+        if pdf_path is not None:
+            # Single file path provided
+            pdf_paths = [Path(pdf_path)]
+        elif pdf_files is not None:
+            # List of files provided
             pdf_paths = [Path(p) for p in pdf_files]
+        else:
+            # Auto-discover from docs directory
+            pdf_paths = discover_pdf_files(DOCS_DIR)
         
         # Verify files exist
         valid_pdf_files = []
@@ -663,7 +688,7 @@ def main(
         
         if not valid_pdf_files:
             logger.error("No valid PDF files found to process")
-            return
+            return {}
         
         logger.info(f"Processing {len(valid_pdf_files)} PDF files")
         
@@ -699,21 +724,8 @@ def main(
         logger.info(f"Duration: {duration:.2f} seconds")
         logger.info(f"Output directory: {output_dir.absolute()}")
         
+        return results
+        
     except Exception as e:
         logger.error(f"Fatal error in main execution: {e}", exc_info=True)
         raise
-
-
-if __name__ == "__main__":
-    # Configuration from environment variables
-    USE_CACHE = os.getenv("USE_CACHE", "true").lower() == "true"
-    PARALLEL_CHUNKS = os.getenv("PARALLEL_CHUNKS", "true").lower() == "true"
-    
-    # Note: This main.py is deprecated. Use the tax_case_extraction package instead:
-    # from tax_case_extraction import extract
-    # extract()
-    
-    main(
-        use_cache=USE_CACHE,
-        parallel_chunks=PARALLEL_CHUNKS
-    )
