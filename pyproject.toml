@@ -56,12 +56,15 @@ dev = [
 tax-extract = "tax_case_extraction.extractor:extract"
 
 [project.urls]
-Homepage = "https://github.com/UddyOrizu/tax-case-data-extraction"
-Repository = "https://github.com/UddyOrizu/tax-case-data-extraction"
-Issues = "https://github.com/UddyOrizu/tax-case-data-extraction/issues"
+Homepage = "https://github.com/susannah-b/tax-case-data-extraction"
+Repository = "https://github.com/susannah-b/tax-case-data-extraction"
+Issues = "https://github.com/susannah-b/tax-case-data-extraction/issues"
 
 [tool.setuptools]
-packages = ["app", "app.models", "tax_case_extraction"]
+packages = ["tax_case_extraction"]
+
+[tool.setuptools.package-data]
+tax_case_extraction = ["py.typed"]
 
 [tool.black]
 line-length = 100
